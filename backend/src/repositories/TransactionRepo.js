@@ -153,6 +153,22 @@ class TransactionRepo {
     return rows.map(row => new PartyPayment(row));
   }
 
+  static async getPartyPaymentsRawByDate(party_id, from, to) {
+    let sql = `SELECT id, party_id, party_name, date, amount_paid, remarks, total_amount, remaining_amount FROM party_payments WHERE party_id = ?`;
+    const params = [party_id];
+    if (from) {
+      sql += ' AND date >= ?';
+      params.push(from);
+    }
+    if (to) {
+      sql += ' AND date <= ?';
+      params.push(to);
+    }
+    sql += ' ORDER BY date DESC';
+    const [rows] = await pool.execute(sql, params);
+    return rows;
+  }
+
   // ===================== FACTORY PAYMENTS =====================
   static async createFactoryPayment(data) {
     let { factory_id, factory_name, date, amount_received, remarks } = data;
@@ -208,6 +224,22 @@ class TransactionRepo {
     sql += ' ORDER BY date DESC';
     const [rows] = await pool.execute(sql, params);
     return rows.map(row => new FactoryPayment(row));
+  }
+
+  static async getFactoryPaymentsRawByDate(factory_id, from, to) {
+    let sql = `SELECT id, factory_id, factory_name, date, amount_received, remarks, total_amount, remaining_amount FROM factory_payments WHERE factory_id = ?`;
+    const params = [factory_id];
+    if (from) {
+      sql += ' AND date >= ?';
+      params.push(from);
+    }
+    if (to) {
+      sql += ' AND date <= ?';
+      params.push(to);
+    }
+    sql += ' ORDER BY date DESC';
+    const [rows] = await pool.execute(sql, params);
+    return rows;
   }
 
   // // ===================== FILTER COMBINED TRANSACTIONS =====================
@@ -386,6 +418,143 @@ class TransactionRepo {
     }
   
     return results;
+  }
+
+  // ===================== SUMMARY CALCULATIONS =====================
+  static async getSummaryByParty(partyId, startDate = null, endDate = null) {
+    const party = await pool.execute('SELECT * FROM parties WHERE id = ?', [partyId]);
+    if (!party[0].length) throw new Error('Party not found');
+
+    let sqlTransactions = 'SELECT SUM(total_amount) as total_amount FROM party_transactions WHERE party_id = ?';
+    let sqlPayments = 'SELECT SUM(amount_paid) as total_paid FROM party_payments WHERE party_id = ?';
+    let params = [partyId];
+
+    if (startDate) {
+      sqlTransactions += ' AND date >= ?';
+      sqlPayments += ' AND date >= ?';
+      params.push(startDate);
+    }
+    if (endDate) {
+      sqlTransactions += ' AND date <= ?';
+      sqlPayments += ' AND date <= ?';
+      params.push(endDate);
+    }
+
+    const [transactions] = await pool.execute(sqlTransactions, params);
+    const [payments] = await pool.execute(sqlPayments, params);
+
+    const totalAmount = parseFloat(transactions[0].total_amount || 0);
+    const totalPaid = parseFloat(payments[0].total_paid || 0);
+    const remaining = totalAmount - totalPaid;
+
+    // Get transaction details
+    let sqlDetails = 'SELECT * FROM party_transactions WHERE party_id = ?';
+    let detailParams = [partyId];
+    
+    if (startDate) {
+      sqlDetails += ' AND date >= ?';
+      detailParams.push(startDate);
+    }
+    if (endDate) {
+      sqlDetails += ' AND date <= ?';
+      detailParams.push(endDate);
+    }
+    sqlDetails += ' ORDER BY date DESC';
+
+    const [transactionDetails] = await pool.execute(sqlDetails, detailParams);
+
+    // Get payment details
+    let sqlPaymentDetails = 'SELECT id, date, amount_paid, remarks, total_amount, remaining_amount FROM party_payments WHERE party_id = ?';
+    let paymentDetailParams = [partyId];
+
+    if (startDate) {
+      sqlPaymentDetails += ' AND date >= ?';
+      paymentDetailParams.push(startDate);
+    }
+    if (endDate) {
+      sqlPaymentDetails += ' AND date <= ?';
+      paymentDetailParams.push(endDate);
+    }
+    sqlPaymentDetails += ' ORDER BY date DESC';
+
+    const [paymentDetails] = await pool.execute(sqlPaymentDetails, paymentDetailParams);
+
+    return {
+      party: party[0][0],
+      totalAmount,
+      totalPaid,
+      remaining,
+      transactions: transactionDetails,
+      payments: paymentDetails
+    };
+  }
+
+  static async getSummaryByFactory(factoryId, startDate = null, endDate = null) {
+    const factory = await pool.execute('SELECT * FROM factories WHERE id = ?', [factoryId]);
+    if (!factory[0].length) throw new Error('Factory not found');
+
+    let sqlTransactions = 'SELECT SUM(total_amount) as total_amount FROM factory_transactions WHERE factory_id = ?';
+    let sqlPayments = 'SELECT SUM(amount_received) as total_received FROM factory_payments WHERE factory_id = ?';
+    let params = [factoryId];
+
+    if (startDate) {
+      sqlTransactions += ' AND date >= ?';
+      sqlPayments += ' AND date >= ?';
+      params.push(startDate);
+    }
+    if (endDate) {
+      sqlTransactions += ' AND date <= ?';
+      sqlPayments += ' AND date <= ?';
+      params.push(endDate);
+    }
+
+    const [transactions] = await pool.execute(sqlTransactions, params);
+    const [payments] = await pool.execute(sqlPayments, params);
+
+    const totalAmount = parseFloat(transactions[0].total_amount || 0);
+    const totalReceived = parseFloat(payments[0].total_received || 0);
+    const remaining = totalAmount - totalReceived;
+
+    // Get transaction details
+    let sqlDetails = 'SELECT * FROM factory_transactions WHERE factory_id = ?';
+    let detailParams = [factoryId];
+    
+    if (startDate) {
+      sqlDetails += ' AND date >= ?';
+      detailParams.push(startDate);
+    }
+    if (endDate) {
+      sqlDetails += ' AND date <= ?';
+      detailParams.push(endDate);
+    }
+    sqlDetails += ' ORDER BY date DESC';
+
+    const [transactionDetails] = await pool.execute(sqlDetails, detailParams);
+
+    // Get payment details
+    let sqlPaymentDetails = 'SELECT id, date, amount_received, remarks, total_amount, remaining_amount FROM factory_payments WHERE factory_id = ?';
+    let paymentDetailParams = [factoryId];
+
+    if (startDate) {
+      sqlPaymentDetails += ' AND date >= ?';
+      paymentDetailParams.push(startDate);
+    }
+    if (endDate) {
+      sqlPaymentDetails += ' AND date <= ?';
+      paymentDetailParams.push(endDate);
+    }
+    sqlPaymentDetails += ' ORDER BY date DESC';
+
+    const [paymentDetails] = await pool.execute(sqlPaymentDetails, paymentDetailParams);
+
+    return {
+      factory: factory[0][0],
+      totalAmount,
+      totalReceived,
+      remaining,
+      transactions: transactionDetails,
+      payments: paymentDetails
+    };
   }
   
 }
